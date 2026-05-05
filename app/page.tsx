@@ -96,7 +96,7 @@ export default function Home() {
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+91 98765 43210"
+                    placeholder="+91 xxx xxx xxxx"
                     required
                     disabled={loading}
                     className="w-full bg-zinc-800/80 border border-white/8 rounded-xl pl-10 pr-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-violet-500/60 focus:border-violet-500/40 disabled:opacity-50 transition-all"

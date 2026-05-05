@@ -1,36 +1,102 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HireScreen AI
 
-## Getting Started
+Web app for recruiters to trigger **Bolna** voice-agent screening calls, receive **webhook** payloads after each call, and review **summaries** and transcripts in a dashboard. No database—call data is stored locally in JSON.
 
-First, run the development server:
+## Features
+
+- **Start a call** — Enter a candidate phone number (E.164, e.g. `+91xxxxxxxxxx`) and invoke Bolna’s outbound call API.
+- **Webhook ingestion** — `POST /api/webhook` accepts Bolna execution payloads (same shape as their execution API).
+- **Dashboard** — Card list with status, summary preview, expandable transcript.
+- **Local persistence** — Records live in `data/calls.json` (gitignored).
+
+## Stack
+
+- [Next.js](https://nextjs.org) App Router (React 19)
+- [Tailwind CSS](https://tailwindcss.com) v4
+- [Bolna Voice AI API](https://www.bolna.ai/docs)
+
+## Prerequisites
+
+1. **Bolna account** — Create an agent in the [Bolna platform](https://platform.bolna.ai/), configure summarization / extractions as needed.
+2. **Agent ID & API key** — From Bolna for API calls.
+3. **Public webhook URL** — Bolna POSTs to your server. For local development use a tunnel (e.g. [ngrok](https://ngrok.com)).
+
+## Environment variables
+
+Create `.env` in the project root:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+BOLNA_API_KEY=your-api-key
+BOLNA_AGENT_ID=your-agent-uuid
+```
+
+Never commit `.env` (already ignored).
+
+## Setup
+
+Install dependencies (project uses [Bun](https://bun.sh); npm/pnpm/yarn also work):
+
+```bash
+bun install
+```
+
+Run the dev server:
+
+```bash
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Bolna webhook URL (important)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+In the Bolna agent **Analytics** tab, set **“Push all execution data to webhook”** to your **full** webhook path, not the site root:
 
-## Learn More
+```text
+https://YOUR_PUBLIC_HOST/api/webhook
+```
 
-To learn more about Next.js, take a look at the following resources:
+Examples:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Local + ngrok: `https://abc123.ngrok-free.app/api/webhook`
+- Production: `https://your-domain.com/api/webhook`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+If you only set `https://host/` Bolna will POST to `/` and this app’s handler will never run.
 
-## Deploy on Vercel
+## API routes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/create-call` | Body: `{ "phone": "+91xxxxxxxxxx" }`. Calls Bolna `POST https://api.bolna.ai/call`, stores a pending row and attaches `execution_id` when returned. |
+| `POST` | `/api/webhook` | Bolna pushes execution updates here; logs payload server-side and merges into `data/calls.json`. |
+| `GET` | `/api/candidates` | Returns all stored call records (dashboard polls this). |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Data storage
+
+- **File:** `data/calls.json`
+- **Ignored by git:** `/data/calls.json` is in `.gitignore`; `data/.gitkeep` keeps the folder in the repo.
+
+Records align roughly with Bolna execution fields: `id`, `phone`, `execution_id`, `status`, `summary`, `transcript`, optional extraction fields, and `raw_webhook` for debugging.
+
+## Scripts
+
+```bash
+bun dev      # development server
+bun build    # production build
+bun start    # run production server
+bun lint     # ESLint
+```
+
+## Troubleshooting
+
+- **Webhook shows `POST /` in ngrok but nothing in logs** — Webhook URL must end with `/api/webhook`.
+- **Status stuck on “in progress”** — Confirm webhook deliveries and inspect terminal logs (`WEBHOOK RECEIVED` blocks in `app/api/webhook/route.ts`).
+- **Duplicate / stale rows** — Old rows created before webhook fixes may lack `execution_id`; clear `data/calls.json` or delete the file and retry.
+
+## Deploy notes
+
+Deploy anywhere Next.js runs (Vercel, Railway, etc.). Set `BOLNA_API_KEY` and `BOLNA_AGENT_ID` in the host’s environment. Point Bolna’s webhook to your production `https://.../api/webhook`.
+
+## License
+
+Private / as per your repo.
