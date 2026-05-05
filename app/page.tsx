@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { appendCall } from "@/lib/local-calls";
 
 export default function Home() {
   const [phone, setPhone] = useState("");
@@ -24,7 +25,10 @@ export default function Home() {
       });
       const data = await res.json();
       setResult(data);
-      if (data.success) setPhone("");
+      if (data.success && data.execution_id) {
+        appendCall(phone, data.execution_id);
+        setPhone("");
+      }
     } catch {
       setResult({ error: "Network error" });
     } finally {

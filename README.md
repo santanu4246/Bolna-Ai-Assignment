@@ -1,13 +1,13 @@
 # HireScreen AI
 
-Web app for recruiters to trigger **Bolna** voice-agent screening calls, receive **webhook** payloads after each call, and review **summaries** and transcripts in a dashboard. No database—call data is stored locally in JSON.
+Web app for recruiters to trigger **Bolna** voice-agent screening calls and review **summaries** and transcripts in a dashboard. **No database and no server filesystem** — each browser keeps its own call list in **localStorage**, and the dashboard refreshes by polling Bolna’s execution API (API key stays on the server).
 
 ## Features
 
 - **Start a call** — Enter a candidate phone number (E.164, e.g. `+91xxxxxxxxxx`) and invoke Bolna’s outbound call API.
-- **Webhook ingestion** — `POST /api/webhook` accepts Bolna execution payloads (same shape as their execution API).
-- **Dashboard** — Card list with status, summary preview, expandable transcript.
-- **Local persistence** — Records live in `data/calls.json` (gitignored).
+- **Dashboard** — Card list with status, summary preview, expandable transcript; data merged from Bolna every few seconds.
+- **Browser persistence** — Call rows (`phone`, `execution_id`) saved under `hirescreen_calls_v1` in **localStorage** (this device only).
+- **Optional webhook** — `POST /api/webhook` only **logs** payloads for debugging (does not persist). Dashboard does not depend on it.
 
 ## Stack
 
@@ -18,8 +18,7 @@ Web app for recruiters to trigger **Bolna** voice-agent screening calls, receive
 ## Prerequisites
 
 1. **Bolna account** — Create an agent in the [Bolna platform](https://platform.bolna.ai/), configure summarization / extractions as needed.
-2. **Agent ID & API key** — From Bolna for API calls.
-3. **Public webhook URL** — Bolna POSTs to your server. For local development use a tunnel (e.g. [ngrok](https://ngrok.com)).
+2. **Agent ID & API key** — Required for `create-call` and for polling execution details.
 
 ## Environment variables
 
@@ -48,35 +47,30 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Bolna webhook URL (important)
+## Optional: Bolna webhook (logging only)
 
-In the Bolna agent **Analytics** tab, set **“Push all execution data to webhook”** to your **full** webhook path, not the site root:
+If you want server logs of Bolna pushes, set in the Bolna agent **Analytics** tab:
 
 ```text
 https://YOUR_PUBLIC_HOST/api/webhook
 ```
 
-Examples:
-
-- Local + ngrok: `https://abc123.ngrok-free.app/api/webhook`
-- Production: `https://your-domain.com/api/webhook`
-
-If you only set `https://host/` Bolna will POST to `/` and this app’s handler will never run.
+Use the **full path** `/api/webhook`, not the site root. This route does **not** write to disk or update the UI.
 
 ## API routes
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/api/create-call` | Body: `{ "phone": "+91xxxxxxxxxx" }`. Calls Bolna `POST https://api.bolna.ai/call`, stores a pending row and attaches `execution_id` when returned. |
-| `POST` | `/api/webhook` | Bolna pushes execution updates here; logs payload server-side and merges into `data/calls.json`. |
-| `GET` | `/api/candidates` | Returns all stored call records (dashboard polls this). |
+| `POST` | `/api/create-call` | Body: `{ "phone": "+91xxxxxxxxxx" }`. Calls Bolna `POST https://api.bolna.ai/call`. Client saves `execution_id` to localStorage. |
+| `GET` | `/api/bolna-execution?execution_id=…` | Server-side proxy to `GET https://api.bolna.ai/agent/{agent_id}/execution/{execution_id}` with your API key. |
+| `POST` | `/api/webhook` | Logs JSON body to stdout; returns `{ received: true }`. |
 
 ## Data storage
 
-- **File:** `data/calls.json`
-- **Ignored by git:** `/data/calls.json` is in `.gitignore`; `data/.gitkeep` keeps the folder in the repo.
+- **UI:** `localStorage` key `hirescreen_calls_v1` on each browser.
+- **Production:** Safe on Vercel — no `mkdir` under `/var/task`.
 
-Records align roughly with Bolna execution fields: `id`, `phone`, `execution_id`, `status`, `summary`, `transcript`, optional extraction fields, and `raw_webhook` for debugging.
+Clearing site data / another browser / incognito = empty log.
 
 ## Scripts
 
@@ -89,13 +83,13 @@ bun lint     # ESLint
 
 ## Troubleshooting
 
-- **Webhook shows `POST /` in ngrok but nothing in logs** — Webhook URL must end with `/api/webhook`.
-- **Status stuck on “in progress”** — Confirm webhook deliveries and inspect terminal logs (`WEBHOOK RECEIVED` blocks in `app/api/webhook/route.ts`).
-- **Duplicate / stale rows** — Old rows created before webhook fixes may lack `execution_id`; clear `data/calls.json` or delete the file and retry.
+- **Empty dashboard after deploy** — localStorage is per-browser; start a new call from that browser or pair with the same device you used locally.
+- **Summary/transcript missing** — Depends on Bolna execution payload (summarization enabled, call finished). Poll uses the execution GET endpoint.
+- **Webhook showed `POST /` in ngrok** — Webhook URL must include `/api/webhook` (optional for this app’s UI).
 
 ## Deploy notes
 
-Deploy anywhere Next.js runs (Vercel, Railway, etc.). Set `BOLNA_API_KEY` and `BOLNA_AGENT_ID` in the host’s environment. Point Bolna’s webhook to your production `https://.../api/webhook`.
+Deploy on Vercel or any Next host. Set `BOLNA_API_KEY` and `BOLNA_AGENT_ID` in the project environment.
 
 ## License
 

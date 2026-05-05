@@ -2,13 +2,39 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import type { CallRecord } from "@/lib/storage";
+import {
+  CALLS_STORAGE_KEY,
+  bolnaStatusToUi,
+  getStoredCalls,
+  updateCallByExecutionId,
+  type StoredCall,
+  type UiCallStatus,
+} from "@/lib/local-calls";
 
-const STATUS: Record<string, { dot: string; text: string; bg: string }> = {
-  pending:     { dot: "bg-zinc-500",                    text: "text-zinc-500",   bg: "bg-zinc-500/10 border-zinc-500/20" },
-  in_progress: { dot: "bg-blue-400 animate-pulse",      text: "text-blue-400",   bg: "bg-blue-500/10 border-blue-500/20" },
-  completed:   { dot: "bg-emerald-400",                 text: "text-emerald-400",bg: "bg-emerald-500/10 border-emerald-500/20" },
-  failed:      { dot: "bg-red-400",                     text: "text-red-400",    bg: "bg-red-500/10 border-red-500/20" },
+const STATUS: Record<
+  UiCallStatus,
+  { dot: string; text: string; bg: string }
+> = {
+  pending: {
+    dot: "bg-zinc-500",
+    text: "text-zinc-500",
+    bg: "bg-zinc-500/10 border-zinc-500/20",
+  },
+  in_progress: {
+    dot: "bg-blue-400 animate-pulse",
+    text: "text-blue-400",
+    bg: "bg-blue-500/10 border-blue-500/20",
+  },
+  completed: {
+    dot: "bg-emerald-400",
+    text: "text-emerald-400",
+    bg: "bg-emerald-500/10 border-emerald-500/20",
+  },
+  failed: {
+    dot: "bg-red-400",
+    text: "text-red-400",
+    bg: "bg-red-500/10 border-red-500/20",
+  },
 };
 
 function PhoneIcon() {
@@ -22,41 +48,108 @@ function PhoneIcon() {
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg
-      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`}
     >
-      <polyline points="6 9 12 15 18 9"/>
+      <polyline points="6 9 12 15 18 9" />
     </svg>
   );
 }
 
+function uiStatus(call: StoredCall): UiCallStatus {
+  if (call.bolna_status) return bolnaStatusToUi(call.bolna_status);
+  return "pending";
+}
+
 export default function Dashboard() {
-  const [calls, setCalls] = useState<CallRecord[]>([]);
+  const [calls, setCalls] = useState<StoredCall[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const fetchCalls = useCallback(async () => {
-    try {
-      const res = await fetch("/api/candidates");
-      const data = await res.json();
-      setCalls(data);
-    } catch { /* silent */ }
-    finally { setLoading(false); }
+  const syncFromStorage = useCallback(() => {
+    setCalls(getStoredCalls());
+  }, []);
+
+  const pollBolna = useCallback(async () => {
+    const list = getStoredCalls();
+    setCalls(list);
+
+    await Promise.all(
+      list.map(async (c) => {
+        try {
+          const res = await fetch(
+            `/api/bolna-execution?execution_id=${encodeURIComponent(c.execution_id)}`
+          );
+          const data = (await res.json()) as Record<string, unknown>;
+
+          if (res.ok) {
+            updateCallByExecutionId(c.execution_id, {
+              bolna_status: String(data.status ?? ""),
+              transcript:
+                typeof data.transcript === "string" ? data.transcript : undefined,
+              summary:
+                typeof data.summary === "string" ? data.summary : undefined,
+              poll_error: undefined,
+            });
+          } else {
+            const msg =
+              (data.message as string) ||
+              (data.detail as string) ||
+              `HTTP ${res.status}`;
+            updateCallByExecutionId(c.execution_id, { poll_error: msg });
+          }
+        } catch {
+          updateCallByExecutionId(c.execution_id, {
+            poll_error: "Network error",
+          });
+        }
+      })
+    );
+
+    setCalls(getStoredCalls());
   }, []);
 
   useEffect(() => {
-    fetchCalls();
-    const id = setInterval(fetchCalls, 5000);
-    return () => clearInterval(id);
-  }, [fetchCalls]);
+    const frame = requestAnimationFrame(() => {
+      syncFromStorage();
+      setLoading(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [syncFromStorage]);
 
-  const completed = calls.filter(c => c.status === "completed").length;
-  const inProgress = calls.filter(c => c.status === "in_progress").length;
+  useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    const frame = requestAnimationFrame(() => {
+      void pollBolna();
+      intervalId = setInterval(() => void pollBolna(), 5000);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      if (intervalId !== undefined) clearInterval(intervalId);
+    };
+  }, [pollBolna]);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === CALLS_STORAGE_KEY || e.key === null) syncFromStorage();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [syncFromStorage]);
+
+  const uiCalls = calls.map((c) => ({ call: c, status: uiStatus(c) }));
+  const completed = uiCalls.filter((x) => x.status === "completed").length;
+  const inProgress = uiCalls.filter((x) => x.status === "in_progress").length;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
-      {/* Nav */}
       <nav className="px-6 py-4 flex items-center justify-between border-b border-white/5">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-900/40">
@@ -71,17 +164,19 @@ export default function Dashboard() {
           className="flex items-center gap-1.5 text-sm font-medium bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white px-4 py-2 rounded-xl transition-all shadow-lg shadow-violet-900/30"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
           New Call
         </Link>
       </nav>
 
       <main className="flex-1 px-6 py-8 max-w-2xl mx-auto w-full">
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-2xl font-bold tracking-tight mb-1">Screening Log</h1>
           <p className="text-zinc-500 text-sm">
+            Stored in this browser only · refreshes every 5s from Bolna
+            <span className="mx-2 text-zinc-700">·</span>
             {calls.length} total · {completed} completed
             {inProgress > 0 && (
               <span className="ml-2 text-blue-400 inline-flex items-center gap-1">
@@ -92,14 +187,13 @@ export default function Dashboard() {
           </p>
         </div>
 
-        {/* Stats row */}
         {calls.length > 0 && (
           <div className="grid grid-cols-3 gap-3 mb-6">
             {[
-              { label: "Total Calls",  value: calls.length,  color: "text-zinc-100" },
-              { label: "Completed",    value: completed,      color: "text-emerald-400" },
-              { label: "In Progress",  value: inProgress,     color: "text-blue-400" },
-            ].map(s => (
+              { label: "Total Calls", value: calls.length, color: "text-zinc-100" },
+              { label: "Completed", value: completed, color: "text-emerald-400" },
+              { label: "In Progress", value: inProgress, color: "text-blue-400" },
+            ].map((s) => (
               <div key={s.label} className="bg-zinc-900/60 border border-white/5 rounded-xl p-4">
                 <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
                 <p className="text-xs text-zinc-600 mt-0.5">{s.label}</p>
@@ -108,7 +202,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* List */}
         {loading ? (
           <div className="py-24 text-center text-zinc-700 text-sm">Loading…</div>
         ) : calls.length === 0 ? (
@@ -116,7 +209,7 @@ export default function Dashboard() {
             <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-white/8 flex items-center justify-center mb-4 text-zinc-700">
               <PhoneIcon />
             </div>
-            <p className="text-zinc-500 text-sm mb-4">No screening calls yet</p>
+            <p className="text-zinc-500 text-sm mb-4">No screening calls in this browser yet</p>
             <Link href="/" className="text-sm text-violet-400 hover:text-violet-300 transition-colors">
               Start the first screening →
             </Link>
@@ -124,41 +217,53 @@ export default function Dashboard() {
         ) : (
           <div className="space-y-2.5">
             {calls.map((call) => {
-              const s = STATUS[call.status] ?? STATUS.pending;
+              const status = uiStatus(call);
+              const s = STATUS[status];
               const isOpen = expanded === call.id;
               return (
                 <div key={call.id} className="bg-zinc-900/60 border border-white/5 rounded-2xl overflow-hidden transition-all hover:border-white/10">
                   <button
+                    type="button"
                     onClick={() => setExpanded(isOpen ? null : call.id)}
                     className="w-full text-left px-5 py-4 flex items-center gap-4"
                   >
-                    {/* Status dot */}
                     <span className={`w-2 h-2 rounded-full shrink-0 ${s.dot}`} />
 
-                    {/* Phone */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="text-zinc-500"><PhoneIcon /></span>
+                        <span className="text-zinc-500">
+                          <PhoneIcon />
+                        </span>
                         <span className="font-mono text-sm font-medium text-zinc-200">{call.phone}</span>
                       </div>
-                      {call.summary ? (
+                      {call.poll_error ? (
+                        <p className="text-xs text-red-400/90 line-clamp-2">{call.poll_error}</p>
+                      ) : call.summary ? (
                         <p className="text-xs text-zinc-500 leading-relaxed line-clamp-1">{call.summary}</p>
                       ) : (
                         <p className="text-xs text-zinc-700 italic">
-                          {call.status === "completed" ? "No summary" : call.status === "in_progress" ? "Call in progress…" : "Waiting to connect"}
+                          {status === "completed"
+                            ? "No summary yet"
+                            : status === "in_progress"
+                              ? "Call in progress…"
+                              : "Fetching status…"}
                         </p>
                       )}
                     </div>
 
-                    {/* Right side */}
                     <div className="flex items-center gap-3 shrink-0">
                       <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${s.bg} ${s.text}`}>
-                        {call.status.replace("_", " ")}
+                        {status.replace("_", " ")}
                       </span>
                       <span className="text-xs text-zinc-700">
-                        {new Date(call.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                        {new Date(call.created_at).toLocaleTimeString("en-IN", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
                       </span>
-                      <span className="text-zinc-700"><ChevronIcon open={isOpen} /></span>
+                      <span className="text-zinc-700">
+                        <ChevronIcon open={isOpen} />
+                      </span>
                     </div>
                   </button>
 
@@ -166,14 +271,18 @@ export default function Dashboard() {
                     <div className="border-t border-white/5 px-5 py-5 space-y-5">
                       {call.summary && (
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-widest text-zinc-600 mb-2">Summary</p>
+                          <p className="text-xs font-semibold uppercase tracking-widest text-zinc-600 mb-2">
+                            Summary
+                          </p>
                           <p className="text-sm text-zinc-300 leading-relaxed">{call.summary}</p>
                         </div>
                       )}
 
                       {call.transcript && (
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-widest text-zinc-600 mb-2">Transcript</p>
+                          <p className="text-xs font-semibold uppercase tracking-widest text-zinc-600 mb-2">
+                            Transcript
+                          </p>
                           <div className="bg-zinc-950 rounded-xl border border-white/5 p-4 max-h-60 overflow-auto">
                             <pre className="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap font-mono">
                               {call.transcript}
@@ -182,15 +291,15 @@ export default function Dashboard() {
                         </div>
                       )}
 
-                      {!call.summary && !call.transcript && (
-                        <p className="text-sm text-zinc-700 italic">No data received yet from webhook.</p>
-                      )}
-
-                      {call.execution_id && (
-                        <p className="text-xs text-zinc-800 font-mono pt-1 border-t border-white/5">
-                          {call.execution_id}
+                      {!call.summary && !call.transcript && !call.poll_error && (
+                        <p className="text-sm text-zinc-700 italic">
+                          Waiting for Bolna execution data…
                         </p>
                       )}
+
+                      <p className="text-xs text-zinc-800 font-mono pt-1 border-t border-white/5">
+                        {call.execution_id}
+                      </p>
                     </div>
                   )}
                 </div>

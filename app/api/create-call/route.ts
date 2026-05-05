@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import { createCall, setExecutionId } from "@/lib/storage";
 
 export async function POST(request: NextRequest) {
   const agentId = process.env.BOLNA_AGENT_ID;
@@ -25,8 +24,6 @@ export async function POST(request: NextRequest) {
   if (!phone) {
     return Response.json({ error: "phone is required" }, { status: 400 });
   }
-
-  const record = createCall(phone);
 
   const bolnaRes = await fetch("https://api.bolna.ai/call", {
     method: "POST",
@@ -56,13 +53,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (bolnaData.execution_id) {
-    setExecutionId(record.id, bolnaData.execution_id);
-  }
-
   return Response.json({
     success: true,
-    record_id: record.id,
     execution_id: bolnaData.execution_id,
     status: bolnaData.status,
   });
